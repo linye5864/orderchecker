@@ -1,0 +1,146 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ==================== 用户模块 ====================
+
+model User {
+  id            String    @id @default(uuid())
+  username      String    @unique
+  password      String
+  email         String?   @unique
+  role          String    @default("USER") // SUPER_ADMIN, ADMIN, OPERATOR, VIEWER
+  status        String    @default("ACTIVE") // ACTIVE, DISABLED, PENDING
+  lastLoginAt   DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  
+  // 关系
+  sessions      Session[]
+  tasks         ReconciliationTask[]
+}
+
+model Session {
+  id            String    @id @default(uuid())
+  userId        String
+  token         String    @unique
+  expiresAt     DateTime
+  createdAt     DateTime  @default(now())
+  userIp        String?
+  userAgent     String?
+  
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// ==================== 平台配置模块 ====================
+
+model PlatformConfig {
+  id            String    @id @default(uuid())
+  platformId    String    @unique
+  name          String
+  icon          String
+  enabled       Boolean   @default(true)
+  fieldMappings String    // JSON 存储字段映射
+  tolerance     Float     @default(0.01)
+  autoSync      Boolean   @default(true)
+  syncInterval  Int       @default(15)
+  apiConfig     String?   // JSON 存储 API 配置
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+}
+
+// ==================== 对账任务模块 ====================
+
+model ReconciliationTask {
+  id              String    @id @default(uuid())
+  name            String
+  platformId      String
+  userId          String
+  startDate       DateTime
+  endDate         DateTime
+  status          String    @default("PENDING") // PENDING, PROCESSING, COMPLETED, FAILED
+  progress        Float     @default(0)
+  localOrderCount Int       @default(0)
+  platformOrderCount Int    @default(0)
+  matchedCount    Int       @default(0)
+  exceptionCount  Int       @default(0)
+  totalAmount     Float     @default(0)
+  matchedAmount   Float     @default(0)
+  errorMessage    String?
+  createdAt       DateTime  @default(now())
+  completedAt     DateTime?
+  
+  user            User      @relation(fields: [userId], references: [id])
+  results         ReconciliationResult[]
+  files           UploadedFile[]
+}
+
+// ==================== 对账结果模块 ====================
+
+model ReconciliationResult {
+  id              String    @id @default(uuid())
+  taskId          String
+  totalOrders     Int
+  matchedOrders   Int
+  exceptionOrders Int
+  perfectMatches  Int
+  toleranceMatches Int
+  totalLocalAmount Float
+  totalPlatformAmount Float
+  totalMatchedAmount Float
+  matchRate       Float
+  amountDiff      Float
+  orders          String    // JSON 存储详细订单数据
+  createdAt       DateTime  @default(now())
+  
+  task            ReconciliationTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+}
+
+// ==================== 文件管理模块 ====================
+
+model UploadedFile {
+  id          String    @id @default(uuid())
+  name        String
+  originalName String?
+  type        String    // EXCEL, CSV
+  kind        String    // LOCAL, PLATFORM, FLOW
+  platformId  String?
+  taskId      String?
+  size        Int
+  rowCount    Int
+  filePath    String    // 实际存储路径
+  status      String    @default("PENDING") // PENDING, PROCESSING, COMPLETED, FAILED
+  error       String?
+  createdAt   DateTime  @default(now())
+
+  task        ReconciliationTask? @relation(fields: [taskId], references: [id])
+}
+
+// ==================== 系统配置模块 ====================
+
+model SystemConfig {
+  id        String   @id @default(uuid())
+  key       String   @unique
+  value     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ==================== 操作日志模块 ====================
+
+model AuditLog {
+  id          String   @id @default(uuid())
+  userId      String
+  action      String
+  resource    String
+  resourceId  String?
+  details     String?  // JSON 存储详细信息
+  ipAddress   String?
+  userAgent   String?
+  createdAt   DateTime @default(now())
+}

@@ -1,0 +1,17 @@
+{
+  "name": "订单对账系统",
+  "short_name": "OrderChecker",
+  "description": "企业级订单对账管理系统",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#3b82f6",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "32x32",
+      "type": "image/svg+xml"
+    }
+  ]
+}

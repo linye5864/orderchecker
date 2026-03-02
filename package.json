@@ -1,0 +1,16 @@
+{
+  "name": "orderchecker-root",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -k \"yarn workspace @orderchecker/server dev\" \"yarn workspace @orderchecker/renderer dev\"",
+    "dev:server": "yarn workspace @orderchecker/server dev",
+    "dev:renderer": "yarn workspace @orderchecker/renderer dev",
+    "build": "yarn workspace @orderchecker/renderer build",
+    "build:server": "yarn workspace @orderchecker/server build",
+    "typecheck": "yarn workspace @orderchecker/shared typecheck && yarn workspace @orderchecker/engine typecheck && yarn workspace @orderchecker/renderer typecheck && yarn workspace @orderchecker/server typecheck"
+  }
+}

@@ -1,0 +1,79 @@
+version: '3.8'
+
+services:
+  # PostgreSQL 数据库
+  postgres:
+    image: postgres:15-alpine
+    container_name: orderchecker-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: orderchecker
+      POSTGRES_PASSWORD: orderchecker_password
+      POSTGRES_DB: orderchecker
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U orderchecker"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # 后端服务
+  backend:
+    build:
+      context: .
+      target: backend-production
+    container_name: orderchecker-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://orderchecker:orderchecker_password@postgres:5432/orderchecker
+      JWT_SECRET: your-secret-key-change-in-production
+      JWT_EXPIRES_IN: 7d
+      UPLOAD_DIR: ./uploads
+      MAX_FILE_SIZE: 104857600
+      CORS_ORIGIN: http://localhost:3000
+      PORT: 3001
+    volumes:
+      - ./uploads:/app/uploads
+      - ./packages/server/prisma:/app/prisma
+    ports:
+      - "3001:3001"
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3001/api/v1/health', (r) => { process.exit(r.statusCode === 200 ? 0 : 1) })"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 40s
+
+  # 前端服务（Nginx）
+  frontend:
+    build:
+      context: .
+      target: frontend-production
+    container_name: orderchecker-frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "3000:80"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  default:
+    name: orderchecker-network
