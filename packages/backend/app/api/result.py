@@ -52,7 +52,7 @@ class ResultListResponse(BaseModel):
     """结果列表响应"""
     task_id: str
     details: List[ResultDetailResponse]
-    summary: ResultSummaryResponse
+    summary: Optional[ResultSummaryResponse] = None
     total: int
     page: int
     page_size: int
@@ -121,7 +121,7 @@ async def get_task_details(
             )
             for d in details
         ],
-        summary=ResultSummaryResponse(**summary) if summary else None,
+        summary=ResultSummaryResponse(**summary.model_dump()) if summary else None,
         total=total,
         page=page,
         page_size=page_size,

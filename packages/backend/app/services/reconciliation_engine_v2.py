@@ -41,15 +41,66 @@ class TripartiteReconciliationEngine:
     # 金额容差（分）
     AMOUNT_TOLERANCE = 0.01
     
+    # ========== 从Python对账逻辑迁移的平台特定配置 ==========
+    
+    # 各平台扣款金额字段（根据实际文件字段名）
+    PLATFORM_AMOUNT_FIELDS = {
+        "闪送": "pay_amount",          # 文件为汇总表，无明细字段
+        "达达": "配送费",              # 实际文件字段：配送费
+        "蜂鸟": "配送费总金额",          # 实际文件字段：配送费总金额
+        "顺丰同城": "配送费总价(单位元)",  # 实际文件字段
+        "顺丰企业C": "支付金额",          # 实际文件字段：支付金额
+        "UU跑腿": "实际支付金额",         # 实际文件字段
+        "裹小递": "支付金额",            # 实际文件字段
+        "美团": "pay_amount",           # 待确认
+    }
+    
+    # 各平台完成状态
+    PLATFORM_COMPLETE_STATUS = {
+        "闪送": "已完成",
+        "达达": "已完成",
+        "蜂鸟": "已送达",
+        "顺丰同城": "已完成",
+        "顺丰企业C": "已完成",
+        "UU跑腿": "完成",
+        "裹小递": "已完成",
+        "美团": "已完成",
+    }
+    
+    # 各平台取消状态（根据实际文件状态值）
+    PLATFORM_CANCEL_STATUS = {
+        "闪送": ["已取消"],                      # 待确认
+        "达达": ["已取消", "妥投异常"],
+        "蜂鸟": ["配送异常", "商户取消订单"],     # 实际文件值
+        "顺丰同城": ["已取消"],
+        "顺丰企业C": ["已取消"],
+        "UU跑腿": ["取消"],
+        "裹小递": ["已退款"],
+        "美团": ["已取消", "已退款"],             # 待确认
+    }
+    
+    # 各平台取消违约金字段（根据实际文件字段名）
+    PLATFORM_CANCEL_AMOUNT_FIELDS = {
+        "闪送": "cancel_deduction_amount",  # 待确认
+        "达达": "违约金",                    # 实际文件字段
+        "蜂鸟": "",                          # 蜂鸟取消可能不扣费
+        "顺丰同城": "订单取消费(单位元)",     # 实际文件字段
+        "顺丰企业C": "取消单扣费",           # 实际文件字段
+        "UU跑腿": "",                        # 待确认
+        "裹小递": "取消订单扣款",           # 实际文件字段
+        "美团": "",                          # 待确认
+    }
+    
     # 承运商代码映射 (英文 -> 中文)
     CARRIER_MAP = {
         "dada": "达达",
-        "sf": "顺丰",
-        "sf_enterprise": "顺丰",
+        "sf": "顺丰同城",
+        "sf_enterprise": "顺丰企业C",
         "hh": "蜂鸟",
         "uu": "UU跑腿",
         "ss": "闪送",
         "gxd": "裹小递",
+        "mt": "美团",
     }
     
     def __init__(self, db: Session, task_id: uuid.UUID):
@@ -316,9 +367,22 @@ class TripartiteReconciliationEngine:
         flow_index: Dict[str, List[FlowRecord]],
         platform_index: Dict[str, PlatformBill],
     ) -> List[TripartiteReconciliation]:
-        """执行三方匹配"""
+        """执行三方匹配（添加闪送特殊匹配规则）"""
         results = []
-        all_keys = set(delivery_index.keys()) | set(flow_index.keys()) | set(platform_index.keys())
+        
+        # 构建带闪送特殊处理的索引（订单号后加逗号）
+        # 根据Python对账逻辑：闪送订单编号后加逗号进行匹配
+        enhanced_platform_index = {}
+        for pk, pb in platform_index.items():
+            # 原始键
+            enhanced_platform_index[pk] = pb
+            # 闪送特殊：添加带逗号的键
+            if pb.carrier:
+                carrier_cn = self.CARRIER_MAP.get(pb.carrier, pb.carrier)
+                if carrier_cn == "闪送" and pk:
+                    enhanced_platform_index[pk + ","] = pb
+        
+        all_keys = set(delivery_index.keys()) | set(flow_index.keys()) | set(enhanced_platform_index.keys())
         
         matched_keys = set()
         total = len(all_keys)
@@ -329,7 +393,8 @@ class TripartiteReconciliationEngine:
             
             delivery = delivery_index.get(key)
             flow_list = flow_index.get(key, [])
-            platform = platform_index.get(key)
+            # 优先从增强索引获取（包含闪送特殊处理），再回退到原始索引
+            platform = enhanced_platform_index.get(key) or platform_index.get(key)
             
             # 获取流水单金额（可能多条记录）
             flow_amount = sum(r.deduction_amount for r in flow_list)
@@ -353,7 +418,22 @@ class TripartiteReconciliationEngine:
         
         # 获取核心金额
         delivery_amount = delivery.free if delivery else 0
-        platform_amount = platform.total_deduction if platform else 0
+        # 使用平台特定金额计算（根据Python对账逻辑迁移）
+        # 如果有平台账单，根据平台和状态计算实际扣款金额
+        platform_amount = 0
+        if platform:
+            carrier_cn = self.CARRIER_MAP.get(platform.carrier, platform.carrier) if platform.carrier else ""
+            order_status = platform.order_status or ""
+            if carrier_cn and platform.raw_data:
+                # 使用平台特定方法获取金额
+                platform_amount = self._get_platform_specific_amount(
+                    pd.Series(platform.raw_data),
+                    carrier_cn,
+                    order_status
+                )
+            else:
+                # 兜底：使用原有逻辑
+                platform_amount = platform.total_deduction if platform else 0
         
         # 计算差异
         diff_1v2 = delivery_amount - flow_amount      # 配送单 vs 流水单
@@ -436,10 +516,28 @@ class TripartiteReconciliationEngine:
         # 3. 核心财务风险识别 (预警逻辑)
         delivery_status = (delivery.delivery_status or "") if delivery else ""
         platform_status = (platform.order_status or "") if platform else ""
-        platform_amount = platform.total_deduction if platform else 0
         
-        # 异常场景 A: 已取消但扣费
-        if "取消" in delivery_status or "取消" in platform_status:
+        # 获取平台中文名称
+        platform_amount = 0
+        carrier_cn = ""
+        if platform:
+            carrier_cn = self.CARRIER_MAP.get(platform.carrier, platform.carrier) if platform.carrier else ""
+            # 重新计算平台金额（使用已修改的逻辑）
+            if carrier_cn and platform.raw_data:
+                platform_amount = self._get_platform_specific_amount(
+                    pd.Series(platform.raw_data),
+                    carrier_cn,
+                    platform.order_status or ""
+                )
+            else:
+                platform_amount = platform.total_deduction if platform else 0
+        
+        # 异常场景 A: 已取消但扣费（使用平台特定状态判断）
+        # 根据Python对账逻辑：判断订单是否取消，使用平台特定的取消状态
+        delivery_is_canceled = self._is_order_canceled(delivery_status, carrier_cn) if delivery and carrier_cn else "取消" in delivery_status
+        platform_is_canceled = self._is_order_canceled(platform_status, carrier_cn) if carrier_cn else "取消" in platform_status
+        
+        if delivery_is_canceled or platform_is_canceled:
             if flow_amount > 0 or platform_amount > 0:
                 return (
                     ReconciliationStatus.MAJOR_DISCREPANCY.value,
@@ -447,8 +545,11 @@ class TripartiteReconciliationEngine:
                     f"风险：订单已取消但产生费用 (流水:¥{flow_amount}, 三方:¥{platform_amount})"
                 )
         
-        # 异常场景 B: 未完成产生外部成本
-        if delivery_status and "配送完成" not in delivery_status and platform_amount > 0:
+        # 异常场景 B: 未完成产生外部成本（使用平台特定状态判断）
+        # 根据Python对账逻辑：判断订单是否完成，使用平台特定的完成状态
+        delivery_is_complete = self._is_order_complete(delivery_status, carrier_cn) if delivery and carrier_cn else "配送完成" in delivery_status
+        
+        if delivery_status and not delivery_is_complete and platform_amount > 0:
              return (
                     ReconciliationStatus.MAJOR_DISCREPANCY.value,
                     DiscrepancyType.STATUS_MISMATCH.value,
@@ -846,6 +947,58 @@ class TripartiteReconciliationEngine:
         except:
             return None
     
+
+    # ========== 从Python对账逻辑迁移的平台特定处理方法 ==========
+    
+    def _get_platform_amount_field(self, carrier_cn: str) -> str:
+        """获取平台特定的扣款金额字段名"""
+        return self.PLATFORM_AMOUNT_FIELDS.get(carrier_cn, "配送费")
+
+    def _get_platform_complete_status(self, carrier_cn: str) -> str:
+        """获取平台的完成状态值"""
+        return self.PLATFORM_COMPLETE_STATUS.get(carrier_cn, "已完成")
+
+    def _get_platform_cancel_status(self, carrier_cn: str) -> list:
+        """获取平台的取消状态值列表"""
+        return self.PLATFORM_CANCEL_STATUS.get(carrier_cn, ["已取消"])
+
+    def _get_platform_cancel_amount_field(self, carrier_cn: str) -> str:
+        """获取平台取消违约金字段名"""
+        return self.PLATFORM_CANCEL_AMOUNT_FIELDS.get(carrier_cn, "")
+
+    def _is_order_complete(self, status: str, carrier_cn: str) -> bool:
+        """判断订单是否完成"""
+        if not status:
+            return False
+        complete_status = self._get_platform_complete_status(carrier_cn)
+        return status == complete_status
+
+    def _is_order_canceled(self, status: str, carrier_cn: str) -> bool:
+        """判断订单是否取消"""
+        if not status:
+            return False
+        cancel_statuses = self._get_platform_cancel_status(carrier_cn)
+        return any(cancel_status in status for cancel_status in cancel_statuses)
+
+    def _get_platform_specific_amount(self, row, carrier_cn: str, status: str) -> float:
+        """根据订单状态获取平台实际扣款金额"""
+        is_complete = self._is_order_complete(status, carrier_cn)
+        is_canceled = self._is_order_canceled(status, carrier_cn)
+        
+        if is_complete:
+            amount_field = self._get_platform_amount_field(carrier_cn)
+            return self._safe_float(row, amount_field)
+        elif is_canceled:
+            cancel_field = self._get_platform_cancel_amount_field(carrier_cn)
+            if cancel_field:
+                return self._safe_float(row, cancel_field)
+            else:
+                amount_field = self._get_platform_amount_field(carrier_cn)
+                return self._safe_float(row, amount_field)
+        else:
+            return 0.0
+
+
     def _safe_get_third_party_id(self, row: pd.Series, carrier: str) -> str:
         """安全获取三方订单号"""
         # 转换 carrier 代码为中文名称
@@ -853,11 +1006,13 @@ class TripartiteReconciliationEngine:
         
         column_map = {
             "达达": "第三方订单ID",
-            "闪送": "三方订单编号",
-            "顺丰": "订单号",
-            "蜂鸟": "第三方订单号",
-            "UU跑腿": "订单号",
+            "闪送": "三方订单编号",  # 注：data/闪送账单.xlsx为汇总表，无明细
+            "顺丰同城": "商家订单号",
+            "顺丰企业C": "订单号",
+            "蜂鸟": "商家订单号",
+            "UU跑腿": "三方订单号",
             "裹小递": "订单号",
+            "美团": "订单号",
         }
         column = column_map.get(carrier_cn, "第三方订单号")
         return self._safe_get(row, column)
@@ -869,11 +1024,13 @@ class TripartiteReconciliationEngine:
         
         column_map = {
             "达达": "达达订单ID",
-            "闪送": "订单编号",
-            "顺丰": "运单号",
+            "闪送": "订单编号",  # 注：data/闪送账单.xlsx为汇总表，无明细
+            "顺丰同城": "运单号",
+            "顺丰企业C": "同城运单号",
             "蜂鸟": "蜂鸟订单号",
-            "UU跑腿": "订单号",
+            "UU跑腿": "UU订单号",
             "裹小递": "订单号",
+            "美团": "订单号",
         }
         column = column_map.get(carrier_cn, "平台订单号")
         return self._safe_get(row, column)
@@ -919,8 +1076,8 @@ class TripartiteReconciliationEngine:
             # 只扫描前 30 行
             scan_limit = min(30, len(df))
             for i in range(scan_limit):
-                # 将该行转为字符串列表
-                row_values = df.iloc[i].astype(str).tolist()
+                # 将该行转为字符串列表（部分单元格可能是 float/NaN）
+                row_values = [str(v) for v in df.iloc[i].tolist()]
                 match_count = 0
                 for val in row_values:
                     if any(k in val for k in keywords):

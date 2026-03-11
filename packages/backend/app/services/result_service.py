@@ -5,10 +5,11 @@
 
 from typing import Optional, List, Tuple
 from sqlalchemy.orm import Session
-from sqlalchemy import func, desc
+from sqlalchemy import func, desc, Integer
 
 from app.models.result import ResultDetailInDB, ResultSummary, ResultStatus
 from app.models.orm_result import ReconciliationResult
+from app.models.orm_reconciliation import TripartiteReconciliation, ReconciliationStatus
 
 
 class ResultService:
@@ -23,18 +24,21 @@ class ResultService:
         if not task_uuid:
             return None
 
-        # 查询结果统计
+        # 优先查询三方对账结果
         stats = (
             self.db.query(
-                func.count(ReconciliationResult.id).label("total"),
+                func.count(TripartiteReconciliation.id).label("total"),
                 func.sum(
-                    func.cast(ReconciliationResult.local_amount * 100, func.sqltype.Integer)
-                ).label("total_local"),
+                    func.cast(TripartiteReconciliation.delivery_amount * 100, Integer)
+                ).label("total_delivery"),
                 func.sum(
-                    func.cast(ReconciliationResult.platform_amount * 100, func.sqltype.Integer)
+                    func.cast(TripartiteReconciliation.flow_amount * 100, Integer)
+                ).label("total_flow"),
+                func.sum(
+                    func.cast(TripartiteReconciliation.platform_amount * 100, Integer)
                 ).label("total_platform"),
             )
-            .filter(ReconciliationResult.task_id == task_uuid)
+            .filter(TripartiteReconciliation.task_id == task_uuid)
             .first()
         )
 
@@ -42,33 +46,36 @@ class ResultService:
             return None
 
         matched = (
-            self.db.query(func.count(ReconciliationResult.id))
+            self.db.query(func.count(TripartiteReconciliation.id))
             .filter(
-                ReconciliationResult.task_id == task_uuid,
-                ReconciliationResult.status == ResultStatus.MATCHED,
+                TripartiteReconciliation.task_id == task_uuid,
+                TripartiteReconciliation.status == ReconciliationStatus.MATCHED.value,
             )
             .scalar()
         ) or 0
 
         exception_count = (
-            self.db.query(func.count(ReconciliationResult.id))
+            self.db.query(func.count(TripartiteReconciliation.id))
             .filter(
-                ReconciliationResult.task_id == task_uuid,
-                ReconciliationResult.status == ResultStatus.EXCEPTION,
+                TripartiteReconciliation.task_id == task_uuid,
+                TripartiteReconciliation.status.in_([
+                    ReconciliationStatus.MINOR_DISCREPANCY.value,
+                    ReconciliationStatus.MAJOR_DISCREPANCY.value,
+                ]),
             )
             .scalar()
         ) or 0
 
         missing = (
-            self.db.query(func.count(ReconciliationResult.id))
+            self.db.query(func.count(TripartiteReconciliation.id))
             .filter(
-                ReconciliationResult.task_id == task_uuid,
-                ReconciliationResult.status == ResultStatus.MISSING,
+                TripartiteReconciliation.task_id == task_uuid,
+                TripartiteReconciliation.status == ReconciliationStatus.MISSING_DATA.value,
             )
             .scalar()
         ) or 0
 
-        total_local = (stats.total_local or 0) / 100.0
+        total_delivery = (stats.total_delivery or 0) / 100.0
         total_platform = (stats.total_platform or 0) / 100.0
 
         return ResultSummary(
@@ -77,9 +84,9 @@ class ResultService:
             exception_orders=exception_count,
             missing_orders=missing,
             match_rate=round(matched / stats.total * 100, 2) if stats.total > 0 else 0,
-            total_local_amount=total_local,
+            total_local_amount=total_delivery,
             total_platform_amount=total_platform,
-            total_amount_diff=round(total_platform - total_local, 2),
+            total_amount_diff=round(total_platform - total_delivery, 2),
         )
 
     def get_details(
@@ -94,16 +101,15 @@ class ResultService:
         if not task_uuid:
             return [], 0
 
-        # 构建查询
-        query = self.db.query(ReconciliationResult).filter(
-            ReconciliationResult.task_id == task_uuid
+        # 优先查询三方对账结果
+        query = self.db.query(TripartiteReconciliation).filter(
+            TripartiteReconciliation.task_id == task_uuid
         )
 
         # 按状态筛选
         if status:
             try:
-                result_status = ResultStatus(status)
-                query = query.filter(ReconciliationResult.status == result_status)
+                query = query.filter(TripartiteReconciliation.status == status)
             except ValueError:
                 pass
 
@@ -112,7 +118,7 @@ class ResultService:
 
         # 分页查询
         results = (
-            query.order_by(desc(ReconciliationResult.created_at))
+            query.order_by(desc(TripartiteReconciliation.created_at))
             .offset((page - 1) * page_size)
             .limit(page_size)
             .all()
@@ -121,19 +127,27 @@ class ResultService:
         # 转换为 Pydantic 模型
         details = []
         for r in results:
+            # 映射三方对账状态到通用状态
+            if r.status == ReconciliationStatus.MATCHED.value:
+                result_status = ResultStatus.MATCHED
+            elif r.status == ReconciliationStatus.MISSING_DATA.value:
+                result_status = ResultStatus.MISSING
+            else:
+                result_status = ResultStatus.EXCEPTION
+
             details.append(
                 ResultDetailInDB(
                     id=str(r.id),
                     task_id=str(r.task_id),
-                    order_number=r.order_number,
-                    platform_order_number=r.platform_order_number or "",
-                    status=r.status,
-                    local_amount=r.local_amount,
+                    order_number=r.delivery_order_sn or "",
+                    platform_order_number=r.platform_order_id or "",
+                    status=result_status,
+                    local_amount=r.delivery_amount,
                     platform_amount=r.platform_amount,
-                    amount_diff=r.amount_diff,
-                    local_status=r.local_status,
-                    platform_status=r.platform_status,
-                    reason=r.reason,
+                    amount_diff=r.diff_delivery_vs_flow,
+                    local_status=r.delivery_status,
+                    platform_status=r.platform_order_status,
+                    reason=r.discrepancy_reason,
                     created_at=r.created_at,
                 )
             )
@@ -283,10 +297,13 @@ class ResultService:
         self.db.commit()
         return result
 
-    def _parse_uuid(self, value: str) -> Optional:
+    def _parse_uuid(self, value) -> Optional:
         """安全解析 UUID"""
         import uuid
+        # 如果已经是 UUID 对象，直接返回
+        if isinstance(value, uuid.UUID):
+            return value
         try:
             return uuid.UUID(value)
-        except ValueError:
+        except (ValueError, TypeError, AttributeError):
             return None

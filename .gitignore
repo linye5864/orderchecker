@@ -1,0 +1,81 @@
+# Dependencies
+node_modules/
+packages/renderer/node_modules/
+packages/server/node_modules/
+packages/backend/venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Uploads and data
+packages/backend/uploads/
+packages/backend/test_data/
+packages/backend/data/
+data/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build outputs
+packages/renderer/dist/
+packages/server/dist/
+packages/engine/dist/
+*.tsbuildinfo
+
+# Prisma
+node_modules/.prisma/
+
+# Test coverage
+coverage/
+.nyc_output/
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
+
+# Scripts (if they are for local development only)
+packages/server/src/scripts/
+scripts/*.mjs

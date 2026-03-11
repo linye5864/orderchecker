@@ -19,6 +19,10 @@ export interface DeliveryOrder {
   deliveryStatus: string;          // 配送状态 (配送完成/配送取消等)
   deliveryChannel: number;         // 0=本地订单, 1=第三方接单
   free: number;                   // 扣款金额 (元)
+  // Optional fields required by the original Python tripartite reconciliation
+  adminId?: string;               // 商户ID (admin_id)
+  platformOrderId?: string;       // 第三方平台订单号 (platform_order_id)
+  deliveryId?: string;            // delivery_id / carrier code
   createdAt?: Date;
 }
 
@@ -84,10 +88,10 @@ export interface PlatformAdapter {
   };
   /**
    * 获取订单匹配的键值
-   * @param deliveryOrderSn 配送单订单号
+   * @param localOrder 配送单记录（可能需要 platformOrderId 等字段）
    * @returns 用于匹配的平台订单号键
    */
-  getMatchKey(deliveryOrderSn: string): string;
+  getMatchKey(localOrder: DeliveryOrder): string;
   /**
    * 判断订单是否有效（用于统计）
    * @param order 平台订单
@@ -114,9 +118,9 @@ export class ShanSongAdapter implements PlatformAdapter {
     thirdParty: 'thirdPartyOrderNumber',
   };
 
-  getMatchKey(deliveryOrderSn: string): string {
+  getMatchKey(localOrder: DeliveryOrder): string {
     // 闪送订单后面多了一个','
-    return deliveryOrderSn + ',';
+    return localOrder.deliveryOrderSn + ',';
   }
 
   isValidOrder(order: PlatformOrder): boolean {
@@ -144,8 +148,9 @@ export class XunFengCAdapter implements PlatformAdapter {
     thirdParty: 'platformOrderId',  // 顺丰企业C使用 platform_order_id
   };
 
-  getMatchKey(deliveryOrderSn: string): string {
-    return deliveryOrderSn;
+  getMatchKey(localOrder: DeliveryOrder): string {
+    // 顺丰企业C以同城运单号匹配（配送单中的 platform_order_id）
+    return localOrder.platformOrderId || localOrder.deliveryOrderSn;
   }
 
   isValidOrder(order: PlatformOrder): boolean {
@@ -172,8 +177,9 @@ export class GuoxiaodiAdapter implements PlatformAdapter {
     thirdParty: 'platformOrderId',
   };
 
-  getMatchKey(deliveryOrderSn: string): string {
-    return deliveryOrderSn;
+  getMatchKey(localOrder: DeliveryOrder): string {
+    // 裹小递使用平台订单ID匹配（配送单中的 platform_order_id）
+    return localOrder.platformOrderId || localOrder.deliveryOrderSn;
   }
 
   isValidOrder(order: PlatformOrder): boolean {
@@ -185,6 +191,108 @@ export class GuoxiaodiAdapter implements PlatformAdapter {
       return order.paidAmount;
     }
     return order.cancelDeductionAmount;
+  }
+}
+
+/**
+ * 达达平台适配器
+ */
+export class DadaAdapter implements PlatformAdapter {
+  platformId = 'dada' as const;
+  platformName = '达达';
+
+  matchFields = {
+    local: 'deliveryOrderSn',
+    thirdParty: 'thirdPartyOrderNumber',
+  };
+
+  getMatchKey(localOrder: DeliveryOrder): string {
+    return localOrder.deliveryOrderSn;
+  }
+
+  isValidOrder(order: PlatformOrder): boolean {
+    return order.orderStatus === '已完成';
+  }
+
+  getActualDeduction(order: PlatformOrder): number {
+    return this.isValidOrder(order) ? order.paidAmount : (order.cancelDeductionAmount || 0);
+  }
+}
+
+/**
+ * 蜂鸟平台适配器（取消/异常状态不计违约金，扣款视为 0）
+ */
+export class FengniaoAdapter implements PlatformAdapter {
+  platformId = 'fengniao' as const;
+  platformName = '蜂鸟';
+
+  matchFields = {
+    local: 'deliveryOrderSn',
+    thirdParty: 'thirdPartyOrderNumber',
+  };
+
+  getMatchKey(localOrder: DeliveryOrder): string {
+    return localOrder.deliveryOrderSn;
+  }
+
+  isValidOrder(order: PlatformOrder): boolean {
+    return order.orderStatus === '已送达';
+  }
+
+  getActualDeduction(order: PlatformOrder): number {
+    return this.isValidOrder(order) ? order.paidAmount : 0;
+  }
+}
+
+/**
+ * 顺丰同城平台适配器
+ */
+export class XunFengAdapter implements PlatformAdapter {
+  platformId = 'xunfeng' as const;
+  platformName = '顺丰同城';
+
+  matchFields = {
+    local: 'deliveryOrderSn',
+    thirdParty: 'thirdPartyOrderNumber',
+  };
+
+  getMatchKey(localOrder: DeliveryOrder): string {
+    return localOrder.deliveryOrderSn;
+  }
+
+  isValidOrder(order: PlatformOrder): boolean {
+    return order.orderStatus === '已完成';
+  }
+
+  getActualDeduction(order: PlatformOrder): number {
+    if (this.isValidOrder(order)) return order.paidAmount;
+    if (order.orderStatus === '已取消') return order.cancelDeductionAmount || 0;
+    return 0;
+  }
+}
+
+/**
+ * UU 跑腿平台适配器
+ */
+export class UUAdapter implements PlatformAdapter {
+  platformId = 'uu' as const;
+  platformName = 'UU跑腿';
+
+  matchFields = {
+    local: 'deliveryOrderSn',
+    thirdParty: 'thirdPartyOrderNumber',
+  };
+
+  getMatchKey(localOrder: DeliveryOrder): string {
+    return localOrder.deliveryOrderSn;
+  }
+
+  isValidOrder(order: PlatformOrder): boolean {
+    return order.orderStatus === '完成';
+  }
+
+  getActualDeduction(order: PlatformOrder): number {
+    return this.isValidOrder(order) ? order.paidAmount : (order.cancelDeductionAmount || 0);
   }
 }
 
@@ -202,8 +310,8 @@ export class DefaultPlatformAdapter implements PlatformAdapter {
     thirdParty: 'thirdPartyOrderNumber',
   };
 
-  getMatchKey(deliveryOrderSn: string): string {
-    return deliveryOrderSn;
+  getMatchKey(localOrder: DeliveryOrder): string {
+    return localOrder.deliveryOrderSn;
   }
 
   isValidOrder(order: PlatformOrder): boolean {
@@ -224,10 +332,10 @@ const platformAdapters: Record<string, PlatformAdapter> = {
   'shansong': new ShanSongAdapter(),
   'xunfeng-c': new XunFengCAdapter(),
   'guoxiaodi': new GuoxiaodiAdapter(),
-  'dada': new DefaultPlatformAdapter('dada', '达达'),
-  'fengniao': new DefaultPlatformAdapter('fengniao', '蜂鸟'),
-  'xunfeng': new DefaultPlatformAdapter('xunfeng', '顺丰同城'),
-  'uu': new DefaultPlatformAdapter('uu', 'UU跑腿'),
+  'dada': new DadaAdapter(),
+  'fengniao': new FengniaoAdapter(),
+  'xunfeng': new XunFengAdapter(),
+  'uu': new UUAdapter(),
 };
 
 export function getPlatformAdapter(platformId: string): PlatformAdapter {

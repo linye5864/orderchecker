@@ -83,7 +83,9 @@ export interface ReconciliationDetail {
   status: 'MATCHED' | 'EXCEPTION' | 'MISSING'; // 匹配状态
   localAmount: number;           // 配送单金额
   platformAmount: number;        // 平台账单金额
+  fundAmount?: number;           // 流水扣款金额（可选）
   amountDiff: number;            // 金额差
+  fundDiff?: number;             // 配送 vs 流水差异（可选）
   localStatus: string;           // 本地配送状态
   platformStatus: string;        // 平台订单状态
   reason?: string;               // 异常原因
@@ -156,6 +158,46 @@ function createProgressCallback(taskId: string, onProgress?: (progress: number, 
   };
 }
 
+// ==================== 数据兼容映射（真实文件格式） ====================
+
+function mapDeliveryIdToPlatformId(deliveryId: unknown): string {
+  const idNum = typeof deliveryId === 'number' ? deliveryId : parseInt(String(deliveryId || ''), 10);
+  // Based on matching analysis against current `data/*.xlsx`
+  switch (idNum) {
+    case 1:
+      return 'dada';
+    case 2:
+      return 'uu';
+    case 3:
+      return 'xunfeng';
+    case 4:
+      return 'fengniao';
+    case 6:
+      return 'shansong';
+    case 12:
+      return 'guoxiaodi';
+    case 14:
+      return 'xunfeng-c';
+    default:
+      return 'unknown';
+  }
+}
+
+function mapNumericDeliveryStatus(status: unknown): string {
+  const code = typeof status === 'number' ? status : parseInt(String(status || ''), 10);
+  // Best-effort mapping for exported delivery files
+  switch (code) {
+    case 3:
+      return '配送完成';
+    case 4:
+      return '已取消';
+    case 5:
+      return '配送异常';
+    default:
+      return String(status ?? '');
+  }
+}
+
 // ==================== 核心对账引擎 ====================
 
 /**
@@ -222,6 +264,7 @@ export async function executeReconciliation(
   const result = await compareOrders(
     localOrders,
     platformOrders,
+    flowOrders,
     platformId,
     tolerance,
     taskId,
@@ -231,17 +274,14 @@ export async function executeReconciliation(
   progressCallback(80, '正在生成报告...');
 
   // 计算总金额
-  const totalLocalAmount = localOrders.reduce((sum, o) => sum + o.free, 0);
-  const totalPlatformAmount = platformOrders.reduce((sum, o) => {
-    const adapter = getPlatformAdapter(platformId);
-    return sum + adapter.getActualDeduction(o);
-  }, 0);
+  const totalLocalAmount = result.details.reduce((sum, d) => sum + d.localAmount, 0);
+  const totalPlatformAmount = result.details.reduce((sum, d) => sum + d.platformAmount, 0);
 
   // 更新任务状态
   await updateReconciliationTask(taskId, {
     status: 'COMPLETED',
     progress: 100,
-    localOrderCount: localOrders.length,
+    localOrderCount: result.totalOrders,
     platformOrderCount: platformOrders.length,
     matchedCount: result.matchedOrders,
     exceptionCount: result.exceptionOrders + result.missingOrders,
@@ -372,20 +412,39 @@ async function parseDeliveryOrders(
   }
 
   // 正常情况：有表头
-  const filtered = result.data
-    .filter((row) => row['配送单订单号'] && row['free'] !== undefined);
+  const sample = result.data[0] || {};
+  const hasExportedColumns = Object.prototype.hasOwnProperty.call(sample, 'delivery_order_sn') ||
+    Object.prototype.hasOwnProperty.call(sample, 'delivery_id') ||
+    Object.prototype.hasOwnProperty.call(sample, 'platform_order_id');
 
-  console.log(`[REC] parseDeliveryOrders: 过滤后数量=${filtered.length}`);
-
-  return filtered
-    .map((row) => ({
-      deliveryOrderSn: cleanOrderNumber(row['配送单订单号'] || ''),
-      deliveryPlatform: row['发单运力'] || '',
-      deliveryStatus: row['配送状态'] || '',
-      deliveryChannel: parseInt(row['delivery_channel'] || 0),
+  if (hasExportedColumns) {
+    const filtered = result.data.filter((row) => row['delivery_order_sn'] && row['free'] !== undefined);
+    console.log(`[REC] parseDeliveryOrders: 检测到导出格式列名，过滤后数量=${filtered.length}`);
+    return filtered.map((row) => ({
+      deliveryOrderSn: cleanOrderNumber(String(row['delivery_order_sn'] || '')),
+      deliveryPlatform: mapDeliveryIdToPlatformId(row['delivery_id']),
+      deliveryStatus: mapNumericDeliveryStatus(row['status']),
+      deliveryChannel: parseInt(String(row['delivery_channel'] ?? 0), 10) || 0,
       free: parseAmount(row['free']),
-      createdAt: row['下单时间'] ? new Date(row['下单时间']) : undefined,
+      adminId: row['admin_id'] !== undefined && row['admin_id'] !== null ? String(row['admin_id']) : undefined,
+      platformOrderId: row['platform_order_id'] ? cleanOrderNumber(String(row['platform_order_id'])) : undefined,
+      deliveryId: row['delivery_id'] !== undefined && row['delivery_id'] !== null ? String(row['delivery_id']) : undefined,
+      createdAt: row['create_time'] ? new Date(row['create_time']) : undefined,
     }));
+  }
+
+  const filtered = result.data.filter((row) => row['配送单订单号'] && row['free'] !== undefined);
+  console.log(`[REC] parseDeliveryOrders: 过滤后数量=${filtered.length}`);
+  return filtered.map((row) => ({
+    deliveryOrderSn: cleanOrderNumber(row['配送单订单号'] || ''),
+    deliveryPlatform: row['发单运力'] || '',
+    deliveryStatus: row['配送状态'] || '',
+    deliveryChannel: parseInt(row['delivery_channel'] || 0),
+    free: parseAmount(row['free']),
+    adminId: row['admin_id'] !== undefined && row['admin_id'] !== null ? String(row['admin_id']) : undefined,
+    platformOrderId: row['platform_order_id'] ? cleanOrderNumber(String(row['platform_order_id'])) : undefined,
+    createdAt: row['下单时间'] ? new Date(row['下单时间']) : undefined,
+  }));
 }
 
 /**
@@ -422,6 +481,14 @@ async function parsePlatformOrders(
     // 如果失败，回退到第一个 sheet
     if (!result.success || !result.data || result.data.length === 0) {
       console.log(`[REC] parsePlatformOrders: "订单明细" sheet 不存在或为空，尝试第一个 sheet`);
+      parseOptions = {};
+      result = parseExcel<any>(buffer, parseOptions);
+    }
+  } else if (adapter.platformId === 'dada') {
+    // 达达平台：sheet 名通常为 "1"
+    parseOptions = { sheetName: '1' };
+    result = parseExcel<any>(buffer, parseOptions);
+    if (!result.success || !result.data || result.data.length === 0) {
       parseOptions = {};
       result = parseExcel<any>(buffer, parseOptions);
     }
@@ -471,19 +538,49 @@ async function parsePlatformOrders(
   }
 
   // 正常情况：有表头
-  // 根据平台使用不同的字段名
+  // 根据平台使用不同的字段名（匹配 root `data/*.xlsx` 的真实格式）
   const fieldMap = adapter.platformId === 'shansong' ? {
     thirdPartyOrderNumber: '三方订单编号',
     orderNumber: '订单编号',
     orderStatus: '订单状态',
     paidAmount: '实付金额(元)',
     cancelDeductionAmount: '取消单扣款金额(元)',
+  } : adapter.platformId === 'dada' ? {
+    thirdPartyOrderNumber: '第三方订单ID',
+    orderNumber: '达达订单ID',
+    orderStatus: '订单状态',
+    paidAmount: '运费账户消耗',
+    cancelDeductionAmount: '违约金',
+  } : adapter.platformId === 'fengniao' ? {
+    thirdPartyOrderNumber: '商家订单号',
+    orderNumber: '蜂鸟订单号',
+    orderStatus: '订单状态',
+    paidAmount: '配送费总金额',
+    cancelDeductionAmount: '',
+  } : adapter.platformId === 'xunfeng' ? {
+    thirdPartyOrderNumber: '商家订单号',
+    orderNumber: '顺丰订单号',
+    orderStatus: '订单状态',
+    paidAmount: '配送费总价(单位元)',
+    cancelDeductionAmount: '订单取消费(单位元)',
   } : adapter.platformId === 'xunfeng-c' ? {
     thirdPartyOrderNumber: '同城运单号',
     orderNumber: '订单号',
     orderStatus: '订单状态',
     paidAmount: '支付金额',
     cancelDeductionAmount: '取消单扣费',
+  } : adapter.platformId === 'uu' ? {
+    thirdPartyOrderNumber: '三方订单号',
+    orderNumber: 'UU订单号',
+    orderStatus: '订单状态',
+    paidAmount: '实际支付金额',
+    cancelDeductionAmount: '上门费',
+  } : adapter.platformId === 'guoxiaodi' ? {
+    thirdPartyOrderNumber: '订单号',
+    orderNumber: '订单号',
+    orderStatus: '订单状态',
+    paidAmount: '支付金额',
+    cancelDeductionAmount: '取消订单扣款',
   } : {
     thirdPartyOrderNumber: '三方订单编号',
     orderNumber: '订单编号',
@@ -503,7 +600,7 @@ async function parsePlatformOrders(
       orderNumber: row[fieldMap.orderNumber] || '',
       orderStatus: row[fieldMap.orderStatus] || '',
       paidAmount: parseAmount(row[fieldMap.paidAmount]),
-      cancelDeductionAmount: parseAmount(row[fieldMap.cancelDeductionAmount]),
+      cancelDeductionAmount: fieldMap.cancelDeductionAmount ? parseAmount(row[fieldMap.cancelDeductionAmount]) : 0,
       createdAt: row['下单时间'] ? new Date(row['下单时间']) : undefined,
     }));
 }
@@ -526,10 +623,44 @@ async function parseFlowOrders(
   }
 
   const buffer = await fs.readFile(filePath);
-  const result = parseExcel<any>(buffer, { headerRow: 1 });
+  let result = parseExcel<any>(buffer, { headerRow: 1 });
+  if (!result.success || !result.data || result.data.length === 0) {
+    result = parseExcel<any>(buffer, {});
+  }
 
   if (!result.success || !result.data) {
     return [];
+  }
+
+  const sample = result.data[0] || {};
+  const hasExportedColumns = Object.prototype.hasOwnProperty.call(sample, 'admin_id') &&
+    (Object.prototype.hasOwnProperty.call(sample, 'delivery_order_id') || Object.prototype.hasOwnProperty.call(sample, 'order_sn'));
+
+  if (hasExportedColumns) {
+    return result.data
+      .filter((row) => row['admin_id'])
+      .map((row) => {
+        const unix = row['createtime'];
+        const fromUnix = row['FROM_UNIXTIME(createtime)'];
+        let createdAt: Date | undefined;
+        if (fromUnix) {
+          createdAt = new Date(fromUnix);
+        } else if (typeof unix === 'number' && Number.isFinite(unix)) {
+          createdAt = new Date(unix * 1000);
+        } else if (unix) {
+          const parsed = parseInt(String(unix), 10);
+          if (!Number.isNaN(parsed)) createdAt = new Date(parsed * 1000);
+        }
+
+        return {
+          adminId: String(row['admin_id']),
+          type: parseInt(row['type'] || 0),
+          method: parseInt(row['method'] || 0),
+          money: parseAmount(row['money']),
+          deliveryOrderId: row['delivery_order_id'] ? cleanOrderNumber(String(row['delivery_order_id'])) : undefined,
+          createdAt,
+        };
+      });
   }
 
   return result.data
@@ -550,6 +681,7 @@ async function parseFlowOrders(
 async function compareOrders(
   localOrders: DeliveryOrder[],
   platformOrders: PlatformOrder[],
+  flowOrders: FlowOrder[],
   platformId: string,
   tolerance: number,
   taskId: string,
@@ -569,10 +701,32 @@ async function compareOrders(
   const adapter = getPlatformAdapter(platformId);
   const platformOrderMap = new Map<string, PlatformOrder>();
 
+  const toCents = (amount: number): number => Math.round((Number.isFinite(amount) ? amount : 0) * 100);
+  const centsToAmount = (cents: number): number => Math.round(cents) / 100;
+
+  const isLocalOrderForPlatform = (o: DeliveryOrder): boolean => {
+    const p = String(o.deliveryPlatform || '').trim();
+    if (!p) return false;
+    if (p === platformId) return true;
+    if (p === adapter.platformName) return true;
+    // Fallback: exported delivery_id mapping stored in `deliveryId`
+    if (o.deliveryId && mapDeliveryIdToPlatformId(o.deliveryId) === platformId) return true;
+    return false;
+  };
+
   // 构建平台订单索引
   for (const order of platformOrders) {
     const key = cleanOrderNumber(order.thirdPartyOrderNumber);
     platformOrderMap.set(key, order);
+  }
+
+  // 构建流水扣款索引: (adminId, deliveryOrderSn) -> abs(sum(money[type==1]))
+  const flowMoneySumCents = new Map<string, number>();
+  for (const record of flowOrders) {
+    if (!record.adminId || !record.deliveryOrderId) continue;
+    if (record.type !== 1) continue;
+    const k = `${record.adminId}|${cleanOrderNumber(record.deliveryOrderId)}`;
+    flowMoneySumCents.set(k, (flowMoneySumCents.get(k) || 0) + toCents(record.money));
   }
 
   const details: ReconciliationDetail[] = [];
@@ -584,9 +738,10 @@ async function compareOrders(
   let totalMatchedAmount = 0;
   let totalDiff = 0;
 
-  const validLocalOrders = localOrders.filter(
-    (o) => o.deliveryStatus === '配送完成' && o.deliveryChannel === 0
-  );
+  const platformLocalOrders = localOrders.filter((o) => isLocalOrderForPlatform(o) && o.deliveryChannel === 0);
+  const completedLocalOrders = platformLocalOrders.filter((o) => o.deliveryStatus === '配送完成');
+  // Prefer strict completed-only set (as in docs); if empty, fall back to channel-only to keep real files usable.
+  const validLocalOrders = completedLocalOrders.length > 0 ? completedLocalOrders : platformLocalOrders;
 
   const total = validLocalOrders.length;
   let processed = 0;
@@ -604,7 +759,7 @@ async function compareOrders(
       onProgress?.(progress, `正在对账 ${processed}/${total}`);
     }
 
-    const matchKey = adapter.getMatchKey(localOrder.deliveryOrderSn);
+    const matchKey = cleanOrderNumber(adapter.getMatchKey(localOrder));
     const platformOrder = platformOrderMap.get(matchKey);
 
     if (!platformOrder) {
@@ -616,7 +771,9 @@ async function compareOrders(
         status: 'MISSING',
         localAmount: localOrder.free,
         platformAmount: 0,
+        fundAmount: undefined,
         amountDiff: -localOrder.free,
+        fundDiff: undefined,
         localStatus: localOrder.deliveryStatus,
         platformStatus: '',
         reason: '平台账单中未找到该订单',
@@ -627,65 +784,98 @@ async function compareOrders(
 
     // 获取实际扣款金额
     const platformActualAmount = adapter.getActualDeduction(platformOrder);
-    const amountDiff = platformActualAmount - localOrder.free;
+    const amountDiff = centsToAmount(toCents(platformActualAmount) - toCents(localOrder.free));
 
-    // 判断匹配状态
-    const absDiff = Math.abs(amountDiff);
+    // 获取流水扣款金额（可选）
+    let fundAmount: number | undefined;
+    let fundDiff: number | undefined;
+    const adminId = localOrder.adminId;
+    if (flowOrders.length > 0 && adminId) {
+      const fk = `${adminId}|${cleanOrderNumber(localOrder.deliveryOrderSn)}`;
+      if (flowMoneySumCents.has(fk)) {
+        const absCents = Math.abs(flowMoneySumCents.get(fk) || 0);
+        fundAmount = centsToAmount(absCents);
+        fundDiff = centsToAmount(toCents(localOrder.free) - absCents);
+      } else {
+        // 流水缺失
+        missingCount++;
+        details.push({
+          orderNumber: localOrder.deliveryOrderSn,
+          platformOrderNumber: platformOrder.orderNumber,
+          status: 'MISSING',
+          localAmount: localOrder.free,
+          platformAmount: platformActualAmount,
+          fundAmount: 0,
+          amountDiff,
+          fundDiff: localOrder.free,
+          localStatus: localOrder.deliveryStatus,
+          platformStatus: platformOrder.orderStatus,
+          reason: '流水账单中未找到该订单',
+          createdAt: localOrder.createdAt,
+        });
+        continue;
+      }
+    }
 
-    if (absDiff < 0.01) {
-      // 完全匹配
+    const deliveryCents = toCents(localOrder.free);
+    const platformCents = toCents(platformActualAmount);
+    const fundCents = fundAmount === undefined ? undefined : toCents(fundAmount);
+
+    const isTwoWayMatched = deliveryCents === platformCents;
+    const isThreeWayMatched = fundCents === undefined ? isTwoWayMatched : (isTwoWayMatched && platformCents === fundCents);
+
+    if (isThreeWayMatched) {
       matchedCount++;
       perfectMatches++;
-      toleranceMatches++;
       totalMatchedAmount += localOrder.free;
       details.push({
         orderNumber: localOrder.deliveryOrderSn,
         platformOrderNumber: platformOrder.orderNumber,
         status: 'MATCHED',
-        localAmount: localOrder.free,
-        platformAmount: platformActualAmount,
+        localAmount: centsToAmount(deliveryCents),
+        platformAmount: centsToAmount(platformCents),
+        fundAmount: fundAmount,
         amountDiff: 0,
+        fundDiff: fundCents === undefined ? undefined : centsToAmount(deliveryCents - fundCents),
         localStatus: localOrder.deliveryStatus,
         platformStatus: platformOrder.orderStatus,
         createdAt: localOrder.createdAt,
       });
-    } else if (absDiff <= tolerance) {
-      // 容差匹配
-      matchedCount++;
-      toleranceMatches++;
-      totalMatchedAmount += localOrder.free;
-      totalDiff += amountDiff;
-      details.push({
-        orderNumber: localOrder.deliveryOrderSn,
-        platformOrderNumber: platformOrder.orderNumber,
-        status: 'MATCHED',
-        localAmount: localOrder.free,
-        platformAmount: platformActualAmount,
-        amountDiff,
-        localStatus: localOrder.deliveryStatus,
-        platformStatus: platformOrder.orderStatus,
-        reason: `金额差异 ${amountDiff.toFixed(2)} 元（容差内）`,
-        createdAt: localOrder.createdAt,
-      });
-    } else {
-      // 金额异常
-      exceptionCount++;
-      totalDiff += amountDiff;
-      details.push({
-        orderNumber: localOrder.deliveryOrderSn,
-        platformOrderNumber: platformOrder.orderNumber,
-        status: 'EXCEPTION',
-        localAmount: localOrder.free,
-        platformAmount: platformActualAmount,
-        amountDiff,
-        localStatus: localOrder.deliveryStatus,
-        platformStatus: platformOrder.orderStatus,
-        reason: amountDiff > 0
-          ? `平台多扣款 ${amountDiff.toFixed(2)} 元`
-          : `平台少扣款 ${Math.abs(amountDiff).toFixed(2)} 元`,
-        createdAt: localOrder.createdAt,
-      });
+      continue;
     }
+
+    // Mismatch
+    exceptionCount++;
+    totalDiff += amountDiff;
+
+    // Extra metric: within-tolerance delta between delivery and platform
+    if (Math.abs(centsToAmount(platformCents - deliveryCents)) <= tolerance) {
+      toleranceMatches++;
+    }
+
+    let reason = '所有平台金额不匹配';
+    if (deliveryCents !== platformCents) {
+      const diff = centsToAmount(deliveryCents - platformCents);
+      reason = diff > 0 ? `快小象平台少扣'${Math.abs(diff).toFixed(2)}'元` : `快小象平台多扣'${Math.abs(diff).toFixed(2)}'元`;
+    } else if (fundCents !== undefined && deliveryCents !== fundCents) {
+      const diff = centsToAmount(deliveryCents - fundCents);
+      reason = diff > 0 ? `商户流水少扣'${Math.abs(diff).toFixed(2)}'元` : `商户流水多扣'${Math.abs(diff).toFixed(2)}'元`;
+    }
+
+    details.push({
+      orderNumber: localOrder.deliveryOrderSn,
+      platformOrderNumber: platformOrder.orderNumber,
+      status: 'EXCEPTION',
+      localAmount: centsToAmount(deliveryCents),
+      platformAmount: centsToAmount(platformCents),
+      fundAmount,
+      amountDiff: centsToAmount(platformCents - deliveryCents),
+      fundDiff: fundCents === undefined ? undefined : centsToAmount(deliveryCents - fundCents),
+      localStatus: localOrder.deliveryStatus,
+      platformStatus: platformOrder.orderStatus,
+      reason,
+      createdAt: localOrder.createdAt,
+    });
   }
 
   // 计算匹配率
@@ -900,6 +1090,7 @@ export async function executeReconciliationSync(
   const result = await compareOrders(
     localOrders,
     platformOrders,
+    flowOrders,
     platformId,
     tolerance,
     taskId,
@@ -909,11 +1100,8 @@ export async function executeReconciliationSync(
   onProgress?.(80, '正在生成报告...');
 
   // 计算总金额
-  const totalLocalAmount = localOrders.reduce((sum, o) => sum + o.free, 0);
-  const totalPlatformAmount = platformOrders.reduce((sum, o) => {
-    const adapter = getPlatformAdapter(platformId);
-    return sum + adapter.getActualDeduction(o);
-  }, 0);
+  const totalLocalAmount = result.details.reduce((sum, d) => sum + d.localAmount, 0);
+  const totalPlatformAmount = result.details.reduce((sum, d) => sum + d.platformAmount, 0);
 
   onProgress?.(100, '对账完成');
 

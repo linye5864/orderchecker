@@ -27,21 +27,14 @@ from app.models.task import TaskStatus
 
 def get_file_path(filename: str) -> str:
     """获取 data 目录下文件路径"""
-    # 项目根目录的 data 文件夹 (与 orderchecker 平级)
-    # BACKEND_DIR = orderchecker/packages/backend
-    # 需要 back 3 级: packages/backend -> packages -> orderchecker -> OrderComparer
-    root_data_dir = BACKEND_DIR.parent.parent.parent / "data"
-    filepath = root_data_dir / filename
-    if filepath.exists():
-        return str(filepath)
-    
-    # 检查 backend 的 data 文件夹
-    data_dir = BACKEND_DIR / "data"
-    filepath = data_dir / filename
-    if filepath.exists():
-        return str(filepath)
-    
-    raise FileNotFoundError(f"文件不存在: {filename}")
+    # 历史上仓库层级可能不同，这里从 backend 目录向上逐级查找 `data/filename`。
+    for base_dir in [BACKEND_DIR, *BACKEND_DIR.parents]:
+        data_dir = base_dir / "data"
+        filepath = data_dir / filename
+        if filepath.exists():
+            return str(filepath)
+
+    raise FileNotFoundError(f"文件不存在: {filename} (未在上级目录的 data/ 中找到)")
 
 
 def ensure_user_exists(db: Session) -> User:
