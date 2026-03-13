@@ -43,19 +43,9 @@ class TripartiteReconciliationEngine:
     
     # ========== 从Python对账逻辑迁移的平台特定配置 ==========
     
-    # 各平台扣款金额字段（根据实际文件字段名）
-    PLATFORM_AMOUNT_FIELDS = {
-        "闪送": "pay_amount",          # 文件为汇总表，无明细字段
-        "达达": "配送费",              # 实际文件字段：配送费
-        "蜂鸟": "配送费总金额",          # 实际文件字段：配送费总金额
-        "顺丰同城": "配送费总价(单位元)",  # 实际文件字段
-        "顺丰企业C": "支付金额",          # 实际文件字段：支付金额
-        "UU跑腿": "实际支付金额",         # 实际文件字段
-        "裹小递": "支付金额",            # 实际文件字段
-        "美团": "pay_amount",           # 待确认
-    }
+    # ========== 各平台配置（根据 Python 对账文档）==========
     
-    # 各平台完成状态
+    # 各平台完成状态值
     PLATFORM_COMPLETE_STATUS = {
         "闪送": "已完成",
         "达达": "已完成",
@@ -67,28 +57,64 @@ class TripartiteReconciliationEngine:
         "美团": "已完成",
     }
     
-    # 各平台取消状态（根据实际文件状态值）
+    # 各平台取消状态值
     PLATFORM_CANCEL_STATUS = {
-        "闪送": ["已取消"],                      # 待确认
+        "闪送": ["已取消"],
         "达达": ["已取消", "妥投异常"],
-        "蜂鸟": ["配送异常", "商户取消订单"],     # 实际文件值
+        "蜂鸟": ["配送异常", "商户取消订单", "已取消"],
         "顺丰同城": ["已取消"],
         "顺丰企业C": ["已取消"],
-        "UU跑腿": ["取消"],
-        "裹小递": ["已退款"],
-        "美团": ["已取消", "已退款"],             # 待确认
+        "UU跑腿": ["取消", "已取消"],
+        "裹小递": ["已退款", "已取消"],
+        "美团": ["已取消", "已退款"],
     }
     
-    # 各平台取消违约金字段（根据实际文件字段名）
+    # 各平台完成状态扣款金额字段（订单完成时使用）
+    PLATFORM_COMPLETE_AMOUNT_FIELDS = {
+        "闪送": ["pay_amount", "配送费", "实付金额"],
+        "达达": ["配送费", "consume_amount", "实际配送费"],
+        "蜂鸟": ["配送费", "配送费总金额", "delivery_fee"],
+        "顺丰同城": ["配送费", "配送费总价(单位元)", "delivery_price"],
+        "顺丰企业C": ["支付金额", "pay_price", "实付金额"],
+        "UU跑腿": ["实际支付金额", "pay_amount", "支付金额"],
+        "裹小递": ["支付金额", "pay_amount", "实付金额"],
+        "美团": ["pay_amount", "配送费", "实付金额"],
+    }
+    
+    # 各平台取消状态扣款金额字段（订单取消时使用）
     PLATFORM_CANCEL_AMOUNT_FIELDS = {
-        "闪送": "cancel_deduction_amount",  # 待确认
-        "达达": "违约金",                    # 实际文件字段
-        "蜂鸟": "",                          # 蜂鸟取消可能不扣费
-        "顺丰同城": "订单取消费(单位元)",     # 实际文件字段
-        "顺丰企业C": "取消单扣费",           # 实际文件字段
-        "UU跑腿": "",                        # 待确认
-        "裹小递": "取消订单扣款",           # 实际文件字段
-        "美团": "",                          # 待确认
+        "闪送": ["cancel_deduction_amount", "违约金", "取消扣款"],
+        "达达": ["违约金", "cancel_amount", "取消扣款"],
+        "蜂鸟": ["取消扣款", "违约金", "配送费"],  # 蜂鸟取消可能不扣或用原配送费
+        "顺丰同城": ["订单取消费(单位元)", "取消扣款", "违约金"],
+        "顺丰企业C": ["取消单扣费", "取消扣款", "违约金"],
+        "UU跑腿": ["取消扣款", "违约金", "pay_amount"],
+        "裹小递": ["取消订单扣款", "取消扣款", "违约金"],
+        "美团": ["取消扣款", "违约金", "pay_amount"],
+    }
+    
+    # 各平台三方订单号字段映射
+    PLATFORM_THIRD_PARTY_ID_FIELDS = {
+        "闪送": ["三方订单编号", "order_sn", "订单编号"],
+        "达达": ["第三方订单ID", "第三方订单号", "order_id"],
+        "蜂鸟": ["商家订单号", "order_id", "第三方订单号"],
+        "顺丰同城": ["商家订单号", "order_id", "第三方订单号"],
+        "顺丰企业C": ["订单号", "order_id", "第三方订单号"],
+        "UU跑腿": ["三方订单号", "order_id", "第三方订单号"],
+        "裹小递": ["订单号", "order_id", "第三方订单号"],
+        "美团": ["订单号", "order_id", "第三方订单号"],
+    }
+    
+    # 各平台平台订单号字段映射
+    PLATFORM_ORDER_ID_FIELDS = {
+        "闪送": ["订单编号", "order_no"],
+        "达达": ["达达订单ID", "平台订单号"],
+        "蜂鸟": ["蜂鸟订单号", "平台订单号"],
+        "顺丰同城": ["运单号", "平台订单号"],
+        "顺丰企业C": ["同城运单号", "平台订单号"],
+        "UU跑腿": ["UU订单号", "平台订单号"],
+        "裹小递": ["订单号", "平台订单号"],
+        "美团": ["订单号", "平台订单号"],
     }
     
     # 承运商代码映射 (英文 -> 中文)
@@ -102,10 +128,139 @@ class TripartiteReconciliationEngine:
         "gxd": "裹小递",
         "mt": "美团",
     }
-    
+
+    # ========== 智能字段识别配置 ==========
+    # 字段别名映射：业务字段名 -> 所有可能的表头名称（按优先级排序）
+    # 支持：达达、顺丰同城、顺丰企业C、蜂鸟、UU跑腿、闪送、裹小递、美团
+    FIELD_ALIASES = {
+        # 订单号相关（配送单号、三方单号、订单编号等）
+        "order_sn": [
+            "delivery_order_sn", "三方单号", "配送单号", "订单号", "订单编号",
+            "order_sn", "order_no", "order_id", "orderNo", "orderNo",
+            "sn", "单号", "订单号码", "order_number", "OrderSn",
+            # 各平台特定
+            "第三方订单ID", "三方订单编号", "商家订单号", "三方订单号",
+        ],
+        # 金额相关（支持所有8家平台）
+        "amount": [
+            "initial_fee", "real_fee", "真实配送费", "delivery_fee", "配送费", "消耗金额",
+            "pay_amount", "金额", "发生金额", "变动金额", "money",
+            # 各平台金额字段
+            "配送费总金额", "配送费总价(单位元)", "支付金额", "实际支付金额",
+            "total_amount", "总价", "总金额", "订单金额", "应付金额",
+            # 各平台特定
+            "订单金额", "实际收费金额", "扣款金额", "费用",
+        ],
+        # 商户ID
+        "merchant_id": [
+            "merchant_id", "商户ID", "商户id", "merchantId", "商户编号",
+            "shop_id", "门店ID", "store_id", "shopId", "门店编号",
+            "business_id", "商家ID", "商家id", "businessId",
+        ],
+        # 管理员ID
+        "admin_id": [
+            "admin_id", "管理员ID", "管理员id", "adminId", "管理员编号",
+            "agent_id", "代理商ID", "代理商id", "agentId",
+        ],
+        # 骑手姓名
+        "courier_name": [
+            "courier_name", "骑手姓名", "骑手名称", "配送员", "配送员姓名",
+            "rider_name", "runner_name", "driver_name", "配送骑手", "骑手",
+        ],
+        # 骑手电话
+        "courier_phone": [
+            "courier_phone", "骑手电话", "骑手手机", "配送员电话", "配送员手机",
+            "rider_phone", "runner_phone", "driver_phone", "骑手号码", "骑手电话",
+        ],
+        # 订单状态（支持所有平台状态字段）
+        "order_status": [
+            "配送状态", "订单状态", "status", "order_status", "运单状态",
+            "订单状态", "状态", "orderState",
+        ],
+        # 平台订单ID
+        "platform_order_id": [
+            "platform_order_id", "平台订单号", "第三方订单号", "三方订单号",
+            "third_party_order_id", "thirdPartyOrderId", "平台单号",
+            # 各平台特定
+            "达达订单ID", "订单编号", "运单号", "同城运单号", "蜂鸟订单号",
+        ],
+        # 门店ID
+        "store_id": [
+            "store_id", "门店ID", "门店id", "storeId", "shop_id", "门店编号",
+        ],
+        # 门店名称
+        "store_name": [
+            "store_name", "门店名称", "门店名称", "storeName", "shop_name",
+            "商户名称", "merchant_name", "商户名", "门店",
+        ],
+        # 城市
+        "city": [
+            "city", "城市", "City", "所在城市", "配送城市", "地区",
+        ],
+        # 收货地址
+        "delivery_address": [
+            "delivery_address", "收货地址", "地址", "配送地址", "address",
+            "收货人地址", "target_address", "配送终点", "目的地",
+        ],
+        # 流水号
+        "flow_sn": [
+            "order_sn", "流水号", "交易流水号", "账单单号", "flow_sn",
+            "serial_no", "serial_number", "流水编号", "交易编号",
+        ],
+        # 关联单号（流水单中关联的配送单号）
+        "linked_order_sn": [
+            "delivery_order_id", "关联单号", "配送单号", "三方单号", "订单号",
+            "订单编号", "linked_order_id", "related_order_id", "orig_order_id",
+        ],
+        # 交易时间
+        "transaction_time": [
+            "transaction_time", "交易时间", "发生时间", "创建时间", "时间",
+            "trans_time", "time", "datetime", "交易日期", "操作时间",
+            "发单时间", "取货时间", "完成时间", "取消时间",
+        ],
+        # 变动前余额
+        "balance_before": [
+            "balance_before", "变动前额", "变动前金额", "变动前余额", "前额",
+            "before_amount", "before_balance", "余额变动前",
+        ],
+        # 变动后余额
+        "balance_after": [
+            "balance_after", "变动后额", "变动后金额", "变动后余额", "后额",
+            "after_amount", "after_balance", "余额变动后",
+        ],
+        # 备注
+        "memo": [
+            "memo", "备注", "remark", "note", "备注信息", "说明",
+        ],
+        # 大客户ID
+        "big_client_id": [
+            "订单来源编号", "大客户ID", "客户ID", "client_id", "customer_id",
+            "source_id", "渠道ID", "渠道编号",
+        ],
+        # 大客户名称
+        "big_client_name": [
+            "订单来源", "大客户名称", "客户名称", "client_name", "customer_name",
+            "source_name", "渠道名称", "渠道",
+        ],
+        # 配送距离
+        "delivery_distance": [
+            "配送距离", "distance", "运距", "公里数", "配送里程",
+        ],
+        # 订单重量
+        "order_weight": [
+            "订单重量", "weight", "重量", "物品重量",
+        ],
+        # 取消扣款
+        "cancel_amount": [
+            "违约金", "取消扣款", "取消单扣费", "订单取消费", "cancel_deduction_amount",
+            "取消费", "取消金额", "违约金",
+        ],
+    }
+
     def __init__(self, db: Session, task_id: uuid.UUID):
         self.db = db
-        self.task_id = task_id
+        # 确保 task_id 是 UUID 对象
+        self.task_id = uuid.UUID(task_id) if isinstance(task_id, str) else task_id
         self.callback = None
         self.flow_records = []  # Store parsed flow records for persistence
     
@@ -118,7 +273,74 @@ class TripartiteReconciliationEngine:
         if self.callback:
             self.callback(message, progress)
         print(f"[{self.task_id}] {message}")
-    
+
+    def _smart_get(self, row: Any, field_type: str, default: str = "") -> str:
+        """
+        智能获取字段值 - 根据业务字段类型自动匹配最合适的表头
+
+        Args:
+            row: 数据行（字典或 pandas Series）
+            field_type: 业务字段类型（如 'order_sn', 'amount', 'merchant_id' 等）
+            default: 默认值
+
+        Returns:
+            匹配的字段值，或默认值
+        """
+        aliases = self.FIELD_ALIASES.get(field_type, [])
+        if not aliases:
+            return default
+
+        # 遍历所有可能的字段名，寻找匹配
+        for key in aliases:
+            val = self._safe_get(row, key)
+            if val and val != default:
+                return val
+
+        return default
+
+    def _smart_float(self, row: Any, field_type: str, default: float = 0.0) -> float:
+        """
+        智能获取浮点字段值
+
+        Args:
+            row: 数据行
+            field_type: 业务字段类型
+            default: 默认值
+
+        Returns:
+            匹配的浮点值，或默认值
+        """
+        val_str = self._smart_get(row, field_type)
+        if not val_str:
+            return default
+
+        try:
+            # 去除常见的货币符号和千分位逗号
+            cleaned = str(val_str).replace(',', '').replace('¥', '').replace('元', '').strip()
+            return float(cleaned)
+        except (ValueError, TypeError):
+            return default
+
+    def _smart_datetime(self, row: Any, field_type: str) -> Optional[datetime]:
+        """
+        智能获取日期时间字段值
+
+        Args:
+            row: 数据行
+            field_type: 业务字段类型
+
+        Returns:
+            匹配的日期时间值，或 None
+        """
+        val_str = self._smart_get(row, field_type)
+        if not val_str:
+            return None
+
+        try:
+            return pd.to_datetime(val_str)
+        except:
+            return None
+
     def perform_reconciliation(
         self,
         delivery_file_path: str = None,
@@ -180,167 +402,181 @@ class TripartiteReconciliationEngine:
         return summary
     
     def _parse_delivery_orders(self, file_path: str) -> List[DeliveryOrder]:
-        """解析配送单文件 (宽容模式：不过滤状态)"""
+        """解析配送单文件 (智能模式：自动识别各种表头字段)"""
         df = self._read_data_file(file_path)
         if df.empty:
             return []
-        
+
         try:
             orders = []
             delivery_data = df.to_dict('records')
             total_rows = len(delivery_data)
             print(f"[PARSE] 配送单原始行数: {total_rows}")
-            
+
+            # 打印实际表头供调试
+            if df.columns is not None:
+                print(f"[PARSE] 配送单表头: {list(df.columns)}")
+
             for row in delivery_data:
-                # 获取各个可能的订单号字段
-                delivery_order_sn = (
-                    self._safe_get(row, 'delivery_order_sn') or 
-                    self._safe_get(row, '三方单号') or 
-                    self._safe_get(row, '配送单号') or
-                    self._safe_get(row, '订单号')
-                )
-                
+                # 使用智能字段识别获取订单号
+                delivery_order_sn = self._smart_get(row, 'order_sn')
+
                 # 只要有单号，就认为是有效订单
                 if not delivery_order_sn:
                     continue
-                    
-                # 不再根据状态过滤！
-                # delivery_status = self._safe_get(row, '配送状态')
-                # if delivery_status not in ['配送完成', '已完成', 'SUCCESS']: continue
-                
-                merchant_id = self._safe_get(row, 'merchant_id') or self._safe_get(row, '商户ID')
-                admin_id = self._safe_get(row, 'admin_id') or self._safe_get(row, '管理员ID') or merchant_id
-                
-                # 金额处理：优先找 '真实配送费', 其次 '配送费'
-                delivery_amount = (
-                    self._safe_float(row, 'real_fee') or 
-                    self._safe_float(row, '真实配送费') or
-                    self._safe_float(row, 'delivery_fee') or 
-                    self._safe_float(row, '配送费') or
-                    self._safe_float(row, '消耗金额')
-                )
-                
+
+                # 使用智能字段识别获取其他字段
+                merchant_id = self._smart_get(row, 'merchant_id')
+                admin_id = self._smart_get(row, 'admin_id') or merchant_id
+
+                # 金额处理
+                delivery_amount = self._smart_float(row, 'amount')
+
                 order = DeliveryOrder(
                     task_id=self.task_id,
                     delivery_order_sn=delivery_order_sn,
-                    platform_order_id=self._safe_get(row, 'platform_order_id'),
-                    free=delivery_amount,  # 扣款金额 (模型字段名为 free)
-                    delivery_status=self._safe_get(row, '配送状态'), # 记录状态但不以此过滤
-                    courier_name=self._safe_get(row, 'courier_name'),
-                    courier_phone=self._safe_get(row, 'courier_phone'),
+                    platform_order_id=self._smart_get(row, 'platform_order_id'),
+                    free=delivery_amount,
+                    delivery_status=self._smart_get(row, 'order_status'),
+                    courier_name=self._smart_get(row, 'courier_name'),
+                    courier_phone=self._smart_get(row, 'courier_phone'),
                     merchant_id=merchant_id,
                     admin_id=admin_id,
-                    start_time=self._safe_datetime(row, 'start_time'),
-                    create_time=self._safe_datetime(row, 'create_time') or self._safe_datetime(row, '创建时间'),
+                    start_time=self._smart_datetime(row, 'transaction_time'),
+                    create_time=self._smart_datetime(row, 'transaction_time'),
                     raw_data=row,
                 )
                 orders.append(order)
-            
+
             print(f"[PARSE] 配送单有效解析数: {len(orders)}")
             if len(orders) == 0:
-                raise ValueError(f"虽然读取了 {total_rows} 行，但未能提取出任何有效订单！请检查表头是否包含 '三方单号'/'配送单号'/'订单号'。")
-                
+                # 提供更友好的错误提示，列出实际表头
+                actual_headers = list(df.columns) if df.columns is not None else []
+                raise ValueError(
+                    f"虽然读取了 {total_rows} 行，但未能提取出任何有效订单！\n"
+                    f"实际表头: {actual_headers}\n"
+                    f"系统自动识别的订单号字段包括: {self.FIELD_ALIASES.get('order_sn', [])}\n"
+                    f"请确保表头中包含订单号相关字段（订单号/配送单号/三方单号/order_no 等）"
+                )
+
             return orders
+        except ValueError:
+            # 重新抛出业务错误，保留原错误信息
+            raise
         except Exception as e:
             self._progress(f"解析配送单失败: {str(e)}")
-            # 关键：抛出异常，让主流程感知到失败
             raise 
     
     def _parse_flow_records(self, file_path: str) -> List[FlowRecord]:
-        """解析流水单文件 (优化版)"""
+        """解析流水单文件 (智能模式)"""
         df = self._read_data_file(file_path)
         if df.empty:
             return []
-        
+
         try:
             records = []
             flow_data = df.to_dict('records')
+
+            # 打印实际表头供调试
+            if df.columns is not None:
+                print(f"[PARSE] 流水单表头: {list(df.columns)}")
+
             for row in flow_data:
-                # 智能识别流水字段
-                money = self._safe_float(row, 'money') or self._safe_float(row, '金额') or self._safe_float(row, '发生金额') or self._safe_float(row, '变动金额')
-                order_sn = (
-                    self._safe_get(row, 'order_sn') or 
-                    self._safe_get(row, '流水号') or 
-                    self._safe_get(row, '交易流水号') or
-                    self._safe_get(row, '账单单号')
-                )
-                delivery_order_id = (
-                    self._safe_get(row, 'delivery_order_id') or 
-                    self._safe_get(row, '关联单号') or 
-                    self._safe_get(row, '配送单号') or
-                    self._safe_get(row, '三方单号') or
-                    self._safe_get(row, '订单号') or
-                    self._safe_get(row, '订单编号')
-                )
-                
+                # 使用智能字段识别获取金额
+                money = self._smart_float(row, 'amount')
+
+                # 流水单号（可选）
+                flow_sn = self._smart_get(row, 'flow_sn')
+
+                # 关联的配送单号（关键字段，用于与配送单匹配）
+                delivery_order_id = self._smart_get(row, 'linked_order_sn')
+
                 # 尝试识别类型 (如果是扣款金额通常为负)
                 rtype = self._safe_int(row, 'type', 1 if money < 0 else 2)
-                
+
                 record = FlowRecord(
                     task_id=self.task_id,
-                    admin_id=self._safe_get(row, 'admin_id') or self._safe_get(row, '商户ID'),
-                    order_sn=order_sn,
+                    admin_id=self._smart_get(row, 'admin_id') or self._smart_get(row, 'merchant_id'),
+                    order_sn=flow_sn,
                     money=money,
-                    before=self._safe_float(row, 'before') or self._safe_float(row, '变动前额'),
-                    after=self._safe_float(row, 'after') or self._safe_float(row, '变动后额'),
-                    order_id=order_sn,
+                    before=self._smart_float(row, 'balance_before'),
+                    after=self._smart_float(row, 'balance_after'),
+                    order_id=flow_sn,
                     delivery_order_id=delivery_order_id,
                     type=rtype,
                     method=self._safe_int(row, 'method', 1),
-                    memo=self._safe_get(row, 'memo') or self._safe_get(row, '备注'),
-                    createtime=self._safe_datetime(row, 'createtime') or self._safe_datetime(row, '交易时间'),
+                    memo=self._smart_get(row, 'memo'),
+                    createtime=self._smart_datetime(row, 'transaction_time'),
                     raw_data=row,
                 )
                 records.append(record)
-            
+
+            print(f"[PARSE] 流水单有效解析数: {len(records)}")
             return records
         except Exception as e:
             self._progress(f"解析流水单失败: {str(e)}")
             return []
     
     def _parse_platform_bills(self, platform_files: Dict[str, str]) -> List[PlatformBill]:
-        """解析三方账单文件"""
+        """解析三方账单文件 (智能模式：支持所有8家配送平台)"""
         bills = []
-        
+
         for carrier, file_path in platform_files.items():
             df = self._read_data_file(file_path)
             if df.empty:
                 continue
-            
+
+            # 转换 carrier 代码为中文名称
+            carrier_cn = self.CARRIER_MAP.get(carrier, carrier)
+
             try:
-                
+                # 打印实际表头供调试
+                if df.columns is not None:
+                    print(f"[PARSE] {carrier}({carrier_cn})账单表头: {list(df.columns)}")
+
                 for _, row in df.iterrows():
+                    # 获取订单状态，用于判断使用哪个金额字段
+                    order_status = self._safe_get(row, '订单状态') or self._safe_get(row, '状态') or ""
+
+                    # 使用平台特定方法获取金额（优先），智能识别作为后备
+                    platform_amount = self._get_platform_specific_amount(row, carrier_cn, order_status)
+                    if platform_amount == 0:
+                        # 后备：尝试智能识别
+                        platform_amount = self._smart_float(row, 'amount')
+
                     bill = PlatformBill(
                         task_id=self.task_id,
                         carrier=carrier,
                         carrier_bill_id=self._generate_carrier_bill_id(carrier, row),
                         third_party_order_id=self._safe_get_third_party_id(row, carrier),
                         platform_order_id=self._safe_get_platform_id(row, carrier),
-                        order_source=self._safe_get(row, '订单来源编号'),
-                        merchant_id=self._safe_get(row, '大客户ID'),
-                        merchant_name=self._safe_get(row, '大客户名称'),
-                        store_id=self._safe_get(row, '门店ID'),
-                        store_name=self._safe_get(row, '门店名称'),
-                        city=self._safe_get(row, '城市'),
-                        delivery_address=self._safe_get(row, '收货地址'),
-                        order_amount=self._safe_float(row, '订单金额'),
-                        delivery_fee=self._safe_float(row, '配送费'),
-                        tip=self._safe_float(row, '配送费-小费'),
-                        total_deduction=self._safe_float(row, '应付金额'),
-                        delivery_distance=self._safe_float(row, '配送距离'),
-                        order_weight=self._safe_float(row, '订单重量'),
-                        order_status=self._safe_get(row, '订单状态'),
-                        order_time=self._safe_datetime(row, '发单时间'),
-                        pickup_time=self._safe_datetime(row, '取货时间'),
-                        delivery_time=self._safe_datetime(row, '完成时间'),
-                        cancel_time=self._safe_datetime(row, '取消时间'),
+                        order_source=self._smart_get(row, 'big_client_id'),
+                        merchant_id=self._smart_get(row, 'merchant_id'),
+                        merchant_name=self._smart_get(row, 'big_client_name'),
+                        store_id=self._smart_get(row, 'store_id'),
+                        store_name=self._smart_get(row, 'store_name'),
+                        city=self._smart_get(row, 'city'),
+                        delivery_address=self._smart_get(row, 'delivery_address'),
+                        order_amount=platform_amount,
+                        delivery_fee=platform_amount,
+                        tip=self._smart_float(row, 'amount') or 0.0,
+                        total_deduction=platform_amount,
+                        delivery_distance=self._smart_float(row, 'amount') or 0.0,
+                        order_weight=self._smart_float(row, 'amount') or 0.0,
+                        order_status=self._smart_get(row, 'order_status'),
+                        order_time=self._smart_datetime(row, 'transaction_time'),
+                        pickup_time=self._smart_datetime(row, 'transaction_time'),
+                        delivery_time=self._smart_datetime(row, 'transaction_time'),
+                        cancel_time=self._smart_datetime(row, 'transaction_time'),
                         raw_data=row.to_dict(),
                     )
                     bills.append(bill)
-            
+
+                print(f"[PARSE] {carrier}({carrier_cn})账单有效解析数: {len(bills)}")
+
             except Exception as e:
-                self._progress(f"解析{carrier}账单失败: {str(e)}")
-        
+                self._progress(f"解析{carrier_cn}账单失败: {str(e)}")
+
         return bills
     
     def _build_delivery_index(self, orders: List[DeliveryOrder]) -> Dict[str, DeliveryOrder]:
@@ -948,11 +1184,12 @@ class TripartiteReconciliationEngine:
             return None
     
 
-    # ========== 从Python对账逻辑迁移的平台特定处理方法 ==========
+    # ========== 从Python对账逻辑迁移的平台特定处理方法 =========-
     
     def _get_platform_amount_field(self, carrier_cn: str) -> str:
-        """获取平台特定的扣款金额字段名"""
-        return self.PLATFORM_AMOUNT_FIELDS.get(carrier_cn, "配送费")
+        """获取平台特定的扣款金额字段名（完成状态，优先取第一个）"""
+        fields = self.PLATFORM_COMPLETE_AMOUNT_FIELDS.get(carrier_cn, ["配送费"])
+        return fields[0] if fields else "配送费"
 
     def _get_platform_complete_status(self, carrier_cn: str) -> str:
         """获取平台的完成状态值"""
@@ -981,59 +1218,81 @@ class TripartiteReconciliationEngine:
         return any(cancel_status in status for cancel_status in cancel_statuses)
 
     def _get_platform_specific_amount(self, row, carrier_cn: str, status: str) -> float:
-        """根据订单状态获取平台实际扣款金额"""
+        """
+        根据订单状态获取平台实际扣款金额
+        根据 Python 对账文档：
+        - 订单完成时：使用配送费字段
+        - 订单取消时：使用违约金/取消扣款字段
+        - 其他状态：返回 0
+        """
         is_complete = self._is_order_complete(status, carrier_cn)
         is_canceled = self._is_order_canceled(status, carrier_cn)
         
         if is_complete:
-            amount_field = self._get_platform_amount_field(carrier_cn)
-            return self._safe_float(row, amount_field)
+            # 订单完成：遍历所有可能的金额字段
+            amount_fields = self.PLATFORM_COMPLETE_AMOUNT_FIELDS.get(carrier_cn, ["配送费", "pay_amount"])
+            for field in amount_fields:
+                amount = self._safe_float(row, field)
+                if amount > 0:
+                    return amount
+            return 0.0
+            
         elif is_canceled:
-            cancel_field = self._get_platform_cancel_amount_field(carrier_cn)
-            if cancel_field:
-                return self._safe_float(row, cancel_field)
-            else:
-                amount_field = self._get_platform_amount_field(carrier_cn)
-                return self._safe_float(row, amount_field)
+            # 订单取消：遍历所有可能的取消扣款字段
+            cancel_fields = self.PLATFORM_CANCEL_AMOUNT_FIELDS.get(carrier_cn, ["违约金", "取消扣款"])
+            for field in cancel_fields:
+                amount = self._safe_float(row, field)
+                if amount > 0:
+                    return amount
+            # 如果没有取消扣款，尝试使用原配送费
+            amount_fields = self.PLATFORM_COMPLETE_AMOUNT_FIELDS.get(carrier_cn, ["配送费"])
+            for field in amount_fields:
+                amount = self._safe_float(row, field)
+                if amount > 0:
+                    return amount
+            return 0.0
         else:
+            # 配送中或其他状态：返回 0
             return 0.0
 
 
     def _safe_get_third_party_id(self, row: pd.Series, carrier: str) -> str:
-        """安全获取三方订单号"""
+        """
+        安全获取三方订单号
+        根据 PLATFORM_THIRD_PARTY_ID_FIELDS 配置遍历多个可能的字段
+        """
         # 转换 carrier 代码为中文名称
         carrier_cn = self.CARRIER_MAP.get(carrier, carrier)
         
-        column_map = {
-            "达达": "第三方订单ID",
-            "闪送": "三方订单编号",  # 注：data/闪送账单.xlsx为汇总表，无明细
-            "顺丰同城": "商家订单号",
-            "顺丰企业C": "订单号",
-            "蜂鸟": "商家订单号",
-            "UU跑腿": "三方订单号",
-            "裹小递": "订单号",
-            "美团": "订单号",
-        }
-        column = column_map.get(carrier_cn, "第三方订单号")
-        return self._safe_get(row, column)
+        # 获取该平台的所有可能字段
+        fields = self.PLATFORM_THIRD_PARTY_ID_FIELDS.get(carrier_cn, ["订单号", "三方订单号"])
+        
+        # 遍历所有可能字段
+        for field in fields:
+            val = self._safe_get(row, field)
+            if val:
+                return val
+        
+        return ""
     
     def _safe_get_platform_id(self, row: pd.Series, carrier: str) -> str:
-        """安全获取平台订单号"""
+        """
+        安全获取平台订单号
+        根据 PLATFORM_ORDER_ID_FIELDS 配置遍历多个可能的字段
+        """
         # 转换 carrier 代码为中文名称
         carrier_cn = self.CARRIER_MAP.get(carrier, carrier)
         
-        column_map = {
-            "达达": "达达订单ID",
-            "闪送": "订单编号",  # 注：data/闪送账单.xlsx为汇总表，无明细
-            "顺丰同城": "运单号",
-            "顺丰企业C": "同城运单号",
-            "蜂鸟": "蜂鸟订单号",
-            "UU跑腿": "UU订单号",
-            "裹小递": "订单号",
-            "美团": "订单号",
-        }
-        column = column_map.get(carrier_cn, "平台订单号")
-        return self._safe_get(row, column)
+        # 获取该平台的所有可能字段
+        fields = self.PLATFORM_ORDER_ID_FIELDS.get(carrier_cn, ["平台订单号", "订单号"])
+        
+        # 遍历所有可能字段
+        for field in fields:
+            val = self._safe_get(row, field)
+            if val:
+                return val
+        
+        return ""
     
     def _generate_carrier_bill_id(self, carrier: str, row: pd.Series) -> str:
         """生成三方账单唯一ID"""

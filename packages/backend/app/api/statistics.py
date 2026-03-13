@@ -62,7 +62,7 @@ def get_delivery_status_distribution(
 @router.get("/delivery/trend")
 def get_delivery_trend(
     task_id: str,
-    granularity: str = Query("day", regex="^(day|week|month)$"),
+    granularity: str = Query("day", pattern="^(day|week|month)$"),
     db: Session = Depends(get_db),
     current_user = Depends(get_current_user),
 ):
@@ -417,7 +417,7 @@ def get_amount_comparison(
 @router.get("/reconciliation/discrepancy-trend")
 def get_discrepancy_trend(
     task_id: str,
-    granularity: str = Query("day", regex="^(day|week|month)$"),
+    granularity: str = Query("day", pattern="^(day|week|month)$"),
     db: Session = Depends(get_db),
     current_user = Depends(get_current_user),
 ):
